@@ -1,9 +1,8 @@
+*.swp
 node_modules/
 .expo/
 dist/
-ios/
 android/
-package-lock.json
 npm-debug.*
 *.jks
 *.p8

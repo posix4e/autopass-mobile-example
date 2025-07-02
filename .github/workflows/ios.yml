@@ -1,0 +1,116 @@
+name: iOS CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Generate bundle
+      run: npx bare-pack --target ios --linked --out app/app.bundle.mjs backend/backend.mjs
+    
+    - name: Setup Ruby (for CocoaPods)
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.0'
+        bundler-cache: true
+    
+    - name: Install CocoaPods
+      run: |
+        gem install cocoapods
+        pod --version
+    
+    - name: Install iOS dependencies
+      run: |
+        cd ios
+        pod install
+    
+    # Build for testing on PR
+    - name: Build iOS app (PR Check)
+      if: github.event_name == 'pull_request'
+      run: |
+        cd ios
+        xcodebuild -workspace autopassmobileexample.xcworkspace \
+          -scheme autopassmobileexample \
+          -configuration Debug \
+          -sdk iphonesimulator \
+          -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+          build
+    
+    # TestFlight deployment only on push to main
+    - name: Import App Store Connect API Key
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      env:
+        APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+      run: |
+        mkdir -p ~/private_keys
+        echo $APP_STORE_CONNECT_API_KEY_BASE64 | base64 --decode > ~/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8
+    
+    - name: Build and Archive for TestFlight
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      env:
+        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+      run: |
+        cd ios
+        xcodebuild -workspace autopassmobileexample.xcworkspace \
+          -scheme autopassmobileexample \
+          -configuration Release \
+          -derivedDataPath build \
+          -archivePath build/autopassmobileexample.xcarchive \
+          -destination 'generic/platform=iOS' \
+          -allowProvisioningUpdates \
+          DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+          CODE_SIGNING_ALLOWED=YES \
+          archive
+    
+    - name: Export IPA
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      env:
+        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+      run: |
+        cd ios
+        # Update ExportOptions.plist with the correct team ID from secrets
+        sed -i '' "s/TEAM_ID_PLACEHOLDER/$DEVELOPMENT_TEAM/g" ExportOptions.plist
+        
+        xcodebuild -exportArchive \
+          -archivePath build/autopassmobileexample.xcarchive \
+          -exportPath build \
+          -exportOptionsPlist ExportOptions.plist \
+          -allowProvisioningUpdates
+    
+    - name: Upload to TestFlight
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      env:
+        APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+        APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      run: |
+        cd ios
+        xcrun altool --upload-app \
+          -f build/*.ipa \
+          -t ios \
+          --apiKey $APP_STORE_CONNECT_API_KEY_ID \
+          --apiIssuer $APP_STORE_CONNECT_ISSUER_ID \
+          --verbose
+    
+    - name: Clean up
+      if: always()
+      run: |
+        rm -rf ~/private_keys
