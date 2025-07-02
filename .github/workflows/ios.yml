@@ -68,8 +68,12 @@ jobs:
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       env:
         DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+        CI: true
       run: |
         cd ios
+        # Reinstall pods with CI flag to apply code signing changes
+        pod install
+        
         xcodebuild -workspace autopassmobileexample.xcworkspace \
           -scheme autopassmobileexample \
           -configuration Release \
@@ -79,6 +83,7 @@ jobs:
           -allowProvisioningUpdates \
           DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
           CODE_SIGNING_ALLOWED=YES \
+          CODE_SIGN_IDENTITY="Apple Distribution" \
           archive
     
     - name: Export IPA
