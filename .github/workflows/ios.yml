@@ -10,6 +10,8 @@ on:
 jobs:
   build:
     runs-on: macos-latest
+    env:
+      CI: true
     
     steps:
     - name: Checkout repository
@@ -68,22 +70,27 @@ jobs:
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       env:
         DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
-        CI: true
       run: |
         cd ios
-        # Reinstall pods with CI flag to apply code signing changes
-        pod install
         
+        # Create a temporary keychain for CI
+        security create-keychain -p "" build.keychain
+        security set-keychain-settings -t 3600 -l ~/Library/Keychains/build.keychain
+        security unlock-keychain -p "" ~/Library/Keychains/build.keychain
+        
+        # Build with automatic signing using API key authentication
         xcodebuild -workspace autopassmobileexample.xcworkspace \
           -scheme autopassmobileexample \
           -configuration Release \
           -derivedDataPath build \
           -archivePath build/autopassmobileexample.xcarchive \
           -destination 'generic/platform=iOS' \
+          -authenticationKeyPath ~/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8 \
+          -authenticationKeyID ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }} \
+          -authenticationKeyIssuerID ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }} \
           -allowProvisioningUpdates \
+          -allowProvisioningDeviceRegistration \
           DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-          CODE_SIGNING_ALLOWED=YES \
-          CODE_SIGN_IDENTITY="Apple Distribution" \
           archive
     
     - name: Export IPA
@@ -99,6 +106,9 @@ jobs:
           -archivePath build/autopassmobileexample.xcarchive \
           -exportPath build \
           -exportOptionsPlist ExportOptions.plist \
+          -authenticationKeyPath ~/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8 \
+          -authenticationKeyID ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }} \
+          -authenticationKeyIssuerID ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }} \
           -allowProvisioningUpdates
     
     - name: Upload to TestFlight
@@ -119,3 +129,4 @@ jobs:
       if: always()
       run: |
         rm -rf ~/private_keys
+        security delete-keychain build.keychain || true
